@@ -9,6 +9,9 @@ import dev.nextftc.hardware.impl.MotorEx;
 
 public class BallLoadingDC implements Subsystem {
 
+    private static final double SHOOTER_TOLERANCE_TPS = 50.0;
+    private boolean loadingRequested = false;
+
     // We only want ONE Intake object in the whole program (Singleton pattern)
     private static BallLoadingDC INSTANCE = null;
 
@@ -50,11 +53,36 @@ public class BallLoadingDC implements Subsystem {
     private MotorEx motor = new MotorEx("BallLoadMotor").reversed();
 
     // Power settings for different actions
-    private static final double REVERSE_POWER = -1.0;  // Spin backward (push things OUT)
+    private static final double REVERSE_POWER = -0.75;  // Spin backward (push things OUT)
     private static final double STOP_POWER = 0.0;      // Stop spinning
-    private static final double INTAKE_POWER = 1.0;    // Spin forward (pull things IN)
+    private static final double INTAKE_POWER = 0.75;    // Spin forward (pull things IN)
 
-    public Command startLoading = new InstantCommand(() -> motor.setPower(INTAKE_POWER))
+    private void updateLoading() {
+        // Leave an active reverse command alone.
+        if (motor.getPower() < 0.0) {
+            loadingRequested = false;
+            return;
+        }
+
+        if (loadingRequested) {
+            boolean shooterAtSpeed = ShootingSystem.getInstance()
+                    .isAtTargetVelocity(SHOOTER_TOLERANCE_TPS);
+
+            if (shooterAtSpeed) {
+                motor.setPower(INTAKE_POWER);
+            } else {
+                motor.setPower(STOP_POWER);
+            }
+        }
+    }
+
+    private void start() {
+        loadingRequested = true;
+        motor.setPower(STOP_POWER);
+        updateLoading();
+    }
+
+    public Command startLoading = new InstantCommand(this::start)
             .requires(this);
 
     /**
@@ -64,16 +92,18 @@ public class BallLoadingDC implements Subsystem {
      * - If it's already spinning, it stops
      */
     public Command startStop = new InstantCommand(() -> {
-        if (motor.getPower() <= 0.10 && motor.getPower() >= 0.0)
-            motor.setPower(INTAKE_POWER);   // Turn ON the intake
-        else
-            motor.setPower(STOP_POWER);     // Turn it OFF
+        if (loadingRequested || motor.getPower() != STOP_POWER) {
+            stop();
+        } else {
+            start();
+        }
     }).requires(this);
 
     /**
      * Stops the intake completely (used in emergencies or resets)
      */
     public void stop() {
+        loadingRequested = false;
         motor.setPower(STOP_POWER);
     }
 
@@ -84,7 +114,17 @@ public class BallLoadingDC implements Subsystem {
     public Command reverse = new InstantCommand(() -> motor.setPower(REVERSE_POWER))
             .requires(this);
 
-    public Command stopLoading = new InstantCommand(() -> motor.setPower(STOP_POWER))
+    /** Toggles reverse on/off, cancelling any forward loading request. */
+    public Command startStopReverse = new InstantCommand(() -> {
+        if (motor.getPower() < 0.0) {
+            stop();
+        } else {
+            loadingRequested = false;
+            motor.setPower(REVERSE_POWER);
+        }
+    }).requires(this);
+
+    public Command stopLoading = new InstantCommand(this::stop)
             .requires(this);
 
     /**
@@ -95,6 +135,7 @@ public class BallLoadingDC implements Subsystem {
      */
     @Override
     public void periodic() {
+        updateLoading();
         telemetry.addData("<===== Ball Loading DC Subsystem =====>", "");
         telemetry.addData("Ball Loading ", "Power:%.2f", motor.getPower());
         //telemetry.update(); // optional, updates the screen immediately

@@ -93,6 +93,15 @@ public class Intake implements Subsystem {
     public Command reverse = new InstantCommand(() -> motor.setPower(REVERSE_POWER))
             .requires(this);
 
+    /** Starts reverse if stopped or moving forward; stops if already reversing. */
+    public Command startStopReverse = new InstantCommand(() -> {
+        if (motor.getPower() < 0.0) {
+            stop();
+        } else {
+            motor.setPower(REVERSE_POWER);
+        }
+    }).requires(this);
+
     /**
      * This method runs all the time during TeleOp.
      * It shows live data about what the intake motor is doing:

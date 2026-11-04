@@ -105,19 +105,25 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
         Gamepads.gamepad2().x().whenBecomesTrue(
             new SequentialGroup(
                     shootingSystem.startStop,
-                    new Delay(4.0), //For shooting motor to get to the right speed
+                    //new Delay(4.0), //For shooting motor to get to the right speed
                     ballLoadingDC.startStop
             )
         );
 
         // Y button → aim the shooter down
         //Gamepads.gamepad2().y().whenBecomesTrue(shootingDirectionServo.downShootingServo);
+        Gamepads.gamepad2().y().whenBecomesTrue(
+                new SequentialGroup(
+                        ballLoadingDC.startStopReverse,
+                        intakeSystem.startStopReverse
+                )
+        );
 
         // Left bumper → lower shooter power
-        Gamepads.gamepad2().leftBumper().whenBecomesTrue(shootingSystem.decreaseShootingPower);
+        //Gamepads.gamepad2().leftBumper().whenBecomesTrue(shootingSystem.decreaseShootingPower);
 
         // Right bumper → increase shooter power
-        Gamepads.gamepad2().rightBumper().whenBecomesTrue(shootingSystem.increaseShootingPower);
+        //Gamepads.gamepad2().rightBumper().whenBecomesTrue(shootingSystem.increaseShootingPower);
 
         // Intake System Controls on Gamepad 2 as before
         //Gamepads.gamepad2().b().whenBecomesTrue(intakeSystem.reverse);
