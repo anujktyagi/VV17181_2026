@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.autos;
+package org.firstinspires.ftc.teamcode.auton;
 
 import static com.pedropathing.api.Paths.line;
 import static com.pedropathing.ivy.Scheduler.schedule;
@@ -29,7 +29,7 @@ import dev.nextftc.ftc.NextFTCOpMode;
 @Autonomous
 public class VV17181Auto extends NextFTCOpMode {
 
-    private static final double SHOOTING_RUN_SECONDS = 3.0;
+    private static final double SHOOTING_RUN_SECONDS = 7.0;
 
     private Follower follower;
     private boolean pickupComplete;
@@ -39,10 +39,10 @@ public class VV17181Auto extends NextFTCOpMode {
     private final PoseFactory poseFactory = PoseFactory.degrees();
 
     private final Pose startPose = poseFactory.of(24, 24, 0);
-    private final Pose ballPose = poseFactory.of(24, -6, 0);
-    private final Pose ballPickPose = poseFactory.of(30, -6, 0);
+    private final Pose ballPose = poseFactory.of(18, -6, 0);
+    private final Pose ballPickPose = poseFactory.of(24, -6, 0);
     private final Pose parkAlignPose = poseFactory.of(24, 0, 45);
-    private final Pose parkPose = poseFactory.of(-42, -12, 90);
+    private final Pose parkPose = poseFactory.of(-42, -6, 90);
 
 
     @Override
@@ -113,11 +113,11 @@ public class VV17181Auto extends NextFTCOpMode {
         }
 
         return new SequentialGroup(
+                shootingSystem.startShooting,
                 intakeSystem.startIntake,
                 //new Delay(0.5),
-                shootingSystem.startShooting,
-                new Delay(4.0),
-                ballLoadingDC.startLoading,
+                intakeSystem.startIntake,
+                //new Delay(4.0),
                 new Delay(runSeconds),
                 new InstantCommand(this::stopSubsystems)
                         .requires(shootingSystem, ballLoadingDC, intakeSystem)
