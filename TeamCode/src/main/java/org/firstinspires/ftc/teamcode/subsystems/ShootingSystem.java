@@ -126,6 +126,6 @@ public class ShootingSystem implements Subsystem {
         telemetry.addData("Shooter running", running);
         telemetry.addData("Shooter selected target (ticks/s)", "%.1f", targetVelocity);
         telemetry.addData("Shooter measured (ticks/s)", "%.1f", measuredVelocity);
-        telemetry.update();
+        //telemetry.update();
     }
 }

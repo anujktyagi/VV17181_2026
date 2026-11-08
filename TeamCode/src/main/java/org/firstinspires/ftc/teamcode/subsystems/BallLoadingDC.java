@@ -11,12 +11,15 @@ public class BallLoadingDC implements Subsystem {
 
     private static final double SHOOTER_TOLERANCE_TPS = 50.0;
     private boolean loadingRequested = false;
+    private boolean initialized = false;
 
     // We only want ONE Intake object in the whole program (Singleton pattern)
     private static BallLoadingDC INSTANCE = null;
 
     // Used to show messages and data on the Driver Station phone
     private Telemetry telemetry;
+    // Diagnostic counter: increases each time NextFTC enters periodic().
+    private long periodicCalls = 0;
 
     /**
      * This sets up the intake system with telemetry.
@@ -35,6 +38,10 @@ public class BallLoadingDC implements Subsystem {
         if (INSTANCE == null) {
             INSTANCE = new BallLoadingDC(telemetry);
         }
+        // The singleton survives OpMode changes; use the current OpMode's telemetry.
+        INSTANCE.telemetry = telemetry;
+        INSTANCE.periodicCalls = 0;
+        INSTANCE.initialized = false;
         return INSTANCE;
     }
 
@@ -57,7 +64,25 @@ public class BallLoadingDC implements Subsystem {
     private static final double STOP_POWER = 0.0;      // Stop spinning
     private static final double INTAKE_POWER = 0.75;    // Spin forward (pull things IN)
 
+    @Override
+    public void initialize() {
+        ensureInitialized();
+    }
+
+    /** Initializes the lazy motor once per OpMode, with loading disabled. */
+    private void ensureInitialized() {
+        if (initialized) {
+            return;
+        }
+
+        motor.getMotor();
+        motor.setPower(STOP_POWER);
+        loadingRequested = false;
+        initialized = true;
+    }
+
     private void updateLoading() {
+        ensureInitialized();
         // Leave an active reverse command alone.
         if (motor.getPower() < 0.0) {
             loadingRequested = false;
@@ -77,6 +102,8 @@ public class BallLoadingDC implements Subsystem {
     }
 
     private void start() {
+        // Initialize before enabling loading so initialization cannot clear this request.
+        ensureInitialized();
         loadingRequested = true;
         motor.setPower(STOP_POWER);
         updateLoading();
@@ -92,6 +119,7 @@ public class BallLoadingDC implements Subsystem {
      * - If it's already spinning, it stops
      */
     public Command startStop = new InstantCommand(() -> {
+        ensureInitialized();
         if (loadingRequested || motor.getPower() != STOP_POWER) {
             stop();
         } else {
@@ -103,6 +131,7 @@ public class BallLoadingDC implements Subsystem {
      * Stops the intake completely (used in emergencies or resets)
      */
     public void stop() {
+        ensureInitialized();
         loadingRequested = false;
         motor.setPower(STOP_POWER);
     }
@@ -111,11 +140,15 @@ public class BallLoadingDC implements Subsystem {
      * Command to reverse the intake motor.
      * This is used to push out game pieces that might be stuck.
      */
-    public Command reverse = new InstantCommand(() -> motor.setPower(REVERSE_POWER))
+    public Command reverse = new InstantCommand(() -> {
+        ensureInitialized();
+        motor.setPower(REVERSE_POWER);
+    })
             .requires(this);
 
     /** Toggles reverse on/off, cancelling any forward loading request. */
     public Command startStopReverse = new InstantCommand(() -> {
+        ensureInitialized();
         if (motor.getPower() < 0.0) {
             stop();
         } else {
@@ -135,9 +168,15 @@ public class BallLoadingDC implements Subsystem {
      */
     @Override
     public void periodic() {
-        updateLoading();
+        ensureInitialized();
+        periodicCalls++;
         telemetry.addData("<===== Ball Loading DC Subsystem =====>", "");
-        telemetry.addData("Ball Loading ", "Power:%.2f", motor.getPower());
+        telemetry.addData("Ball Loading periodic calls", periodicCalls);
+        // The updateLoading function will be called after some wait.
+//        if (periodicCalls>100) {
+            updateLoading();
+            telemetry.addData("Ball Loading ", "Power:%.2f", motor.getPower());
+//        }
         //telemetry.update(); // optional, updates the screen immediately
     }
 
