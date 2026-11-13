@@ -28,6 +28,7 @@ import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Light;
 import org.firstinspires.ftc.teamcode.subsystems.Limelight3ASubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.ShootingSystem;
+import org.firstinspires.ftc.teamcode.subsystems.UpDownSystem;
 
 // These come from the NextFTC library
 import dev.nextftc.core.commands.Command;
@@ -63,6 +64,8 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
     private Intake intakeSystem;
     private Limelight3ASubsystem limelight3ASubsystem;
     private Light light;
+    // Encoder-controlled mechanism operated by gamepad 1 after START.
+    private UpDownSystem upDownSystem;
     private PinpointLocalizer localizer;
     private Follower follower;
     private Command driverControlled;
@@ -92,6 +95,10 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
     public void onInit() {
         super.onInit();
 
+        // Record the lower reference during INIT; start with the mechanism lowered.
+        upDownSystem = UpDownSystem.getInstance(telemetry);
+        upDownSystem.initialize();
+
         localizer = new PinpointLocalizer(hardwareMap, Constants.localizerConfig);
         localizer.setPose(PoseFactory.degrees().of(0, 0, 0));
         initializeFollower();
@@ -105,6 +112,7 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
                 new SubsystemComponent(intakeSystem),
                 new SubsystemComponent(ballLoadingDC),
                 new SubsystemComponent(light),
+                new SubsystemComponent(upDownSystem), // Updates mechanism state telemetry.
                 BulkReadComponent.INSTANCE,   // reads all sensors at once for faster updates
                 BindingsComponent.INSTANCE    // helps connect buttons on the gamepads to commands
         );
@@ -188,13 +196,21 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
                 frontRightMotor,
                 backLeftMotor,
                 backRightMotor,
-                Gamepads.gamepad1().rightStickY(),  // forward/backward
-                Gamepads.gamepad1().rightStickX(),  // strafe left/right
-                Gamepads.gamepad1().leftStickX()  // turn left/right
+                Gamepads.gamepad1().leftStickY(),  // forward/backward
+                () -> -(double) gamepad1.left_stick_x,  // Invert strafe so left stick left moves left.
+                () -> -(double) gamepad1.right_stick_x  // Invert turn so right stick left turns left.
+                //Gamepads.gamepad1().rightStickY(),  // forward/backward
+                //Gamepads.gamepad1().rightStickX(),  // strafe left/right
+                //Gamepads.gamepad1().leftStickX()  // turn left/right
         );
 
         // "Schedule" means start running that drive command
         driverControlled.schedule();
+
+        // After START, each press requests a fixed encoder target (not hold-to-move).
+        // During INIT these same buttons still select alliance in onWaitForStart().
+        Gamepads.gamepad1().dpadUp().whenBecomesTrue(upDownSystem.moveUp);
+        Gamepads.gamepad1().dpadDown().whenBecomesTrue(upDownSystem.moveDown);
 
         // Gamepad 1 A: drive to this target relative to the TeleOp origin.
         // The completion check in onUpdate() restores joystick control afterward.
@@ -270,6 +286,14 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
                         }).requires(limelight3ASubsystem)
                 )
         );
+    }
+
+    @Override
+    public void onStop() {
+        // Release active position-control power when the Driver Station stops TeleOp.
+        if (upDownSystem != null) {
+            upDownSystem.stop();
+        }
     }
 
     /**

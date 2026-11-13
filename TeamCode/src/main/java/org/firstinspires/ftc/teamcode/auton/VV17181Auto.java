@@ -73,7 +73,7 @@ public class VV17181Auto extends NextFTCOpMode {
                 ballPose = poseFactory.of(-4, -32, 0);
                 ballPickPose = poseFactory.of(0, -32, 0);
                 parkAlignPose = poseFactory.of(-6, -24, 45);
-                parkPose = poseFactory.of(-67, -40, 90);
+                parkPose = poseFactory.of(-57, -40, 90);
                 break;
             case ROUTE_SIDE:
                 // Side route: intentionally identical for now; adjust these values later.

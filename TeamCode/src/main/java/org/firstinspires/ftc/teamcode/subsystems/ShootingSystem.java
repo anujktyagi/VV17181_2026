@@ -2,6 +2,7 @@ package org.firstinspires.ftc.teamcode.subsystems;
 
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 
@@ -15,14 +16,16 @@ public class ShootingSystem implements Subsystem {
     private static ShootingSystem INSTANCE;
 
     // Starting value only; tune the shooting speed on the robot.
-    private static final double DEFAULT_VELOCITY_TPS = 1150.0;
-    private static final double VELOCITY_ADJUST_TPS = 25.0;
+    private static final double DEFAULT_VELOCITY_TPS = 1130.0;
+    private static final double VELOCITY_ADJUST_TPS = 15.0;
 
     private Telemetry telemetry;
     private final MotorEx shootingMotor1 = new MotorEx("sm1");
     private boolean initialized;
     private boolean running;
     private double targetVelocity = DEFAULT_VELOCITY_TPS;
+    double P = 94.68;
+    double F = 16.00;
 
     private ShootingSystem(Telemetry telemetry) {
         this.telemetry = telemetry;
@@ -59,6 +62,8 @@ public class ShootingSystem implements Subsystem {
         DcMotorEx motor = shootingMotor1.getMotor();
         motor.setPower(0.0);
         motor.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        PIDFCoefficients originalPIDF = new PIDFCoefficients(P, 0, 0, F);
+        motor.setPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER, originalPIDF);
         motor.setVelocity(0.0);
         running = false;
         initialized = true;
