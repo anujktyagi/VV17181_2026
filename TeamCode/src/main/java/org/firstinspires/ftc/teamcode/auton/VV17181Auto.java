@@ -3,6 +3,8 @@ package org.firstinspires.ftc.teamcode.auton;
 import static com.pedropathing.api.Paths.line;
 import static com.pedropathing.ivy.Scheduler.schedule;
 import static com.pedropathing.ivy.commands.Commands.instant;
+import static com.pedropathing.ivy.commands.Commands.waitMs;
+import static com.pedropathing.ivy.groups.Groups.race;
 import static com.pedropathing.ivy.groups.Groups.sequential;
 import static com.pedropathing.ivy.pedro.PedroCommands.follow;
 
@@ -32,8 +34,13 @@ public class VV17181Auto extends NextFTCOpMode {
     // Names for autonomous routes from the straight and side starting positions.
     private enum AutoRoute {
         ROUTE_STRAIGHT,
-        ROUTE_SIDE
+        ROUTE_SIDE,
+        // Placeholder name until the third route is tuned.
+        ROUTE_SHORT
     }
+
+    // Cycle through routes in the order declared in AutoRoute.
+    private static final AutoRoute[] ROUTES = AutoRoute.values();
 
     // Default to the straight route until the driver selects another during INIT.
     private AutoRoute selectedRoute = AutoRoute.ROUTE_STRAIGHT;
@@ -47,7 +54,9 @@ public class VV17181Auto extends NextFTCOpMode {
     // Default to blue unless the driver selects red before pressing START.
     private Alliance selectedAlliance = Alliance.BLUE;
 
-    private static double SHOOTING_RUN_SECONDS = 8.0;
+    private static double START_DELAY_SECONDS = 0.0;
+    private static double SHOOTING_RUN_SECONDS = 5.0;
+    private static double PICKUP_TIMEOUT_SECONDS = 5.0;
 
     private Follower follower;
     private boolean pickupComplete;
@@ -65,6 +74,7 @@ public class VV17181Auto extends NextFTCOpMode {
 
     /** Assigns inches and degrees relative to the selected route's starting position. */
     private void applySelectedRoute() {
+        START_DELAY_SECONDS = 0.0; // Only ROUTE_THIRD overrides this.
         // Separate cases allow each route's poses to be tuned independently.
         switch (selectedRoute) {
             case ROUTE_STRAIGHT:
@@ -82,11 +92,18 @@ public class VV17181Auto extends NextFTCOpMode {
                 ballPickPose = poseFactory.of(4, -14, 27);
                 parkAlignPose = poseFactory.of(-14, -10, 60);
                 parkPose = poseFactory.of(-54, -50, 112);
-                SHOOTING_RUN_SECONDS = 10.0;
+                break;
+            case ROUTE_SHORT:
+                // Copy the straight route for now; tune these poses independently later.
+                startPose = poseFactory.of(0, 0, 0);
+                ballPose = poseFactory.of(0, 0, 0);
+                ballPickPose = poseFactory.of(0, 0, 0);
+                parkAlignPose = poseFactory.of(-7, 0, 0);
+                parkPose = poseFactory.of(0, 30, 270);
+                START_DELAY_SECONDS = 20.0;
                 break;
         }
     }
-
 
     @Override
     public void onInit() {
@@ -111,11 +128,12 @@ public class VV17181Auto extends NextFTCOpMode {
 
     @Override
     public void onWaitForStart() {
-        // Select a route during INIT without starting any robot movement.
-        if (gamepad1.dpad_left) {
-            selectedRoute = AutoRoute.ROUTE_SIDE;
-        } else if (gamepad1.dpad_right) {
-            selectedRoute = AutoRoute.ROUTE_STRAIGHT;
+        // Move one route per press, wrapping at either end of the list.
+        int index = selectedRoute.ordinal();
+        if (gamepad1.dpadRightWasPressed()) {
+            selectedRoute = ROUTES[(index + 1) % ROUTES.length];
+        } else if (gamepad1.dpadLeftWasPressed()) {
+            selectedRoute = ROUTES[(index - 1 + ROUTES.length) % ROUTES.length];
         }
 
         // Choose alliance independently of the left/right route selection.
@@ -128,7 +146,7 @@ public class VV17181Auto extends NextFTCOpMode {
 
         // Display both choices so the driver can confirm them before pressing START.
         // START applies this final selection before scheduling autonomous commands.
-        telemetry.addData("<== Select route ==>", "D-pad left: SIDE | right: STRAIGHT");
+        telemetry.addData("<== Select route ==>", "D-pad left: previous | right: next");
         telemetry.addData("Selected route", selectedRoute);
         telemetry.addData("Select alliance", "D-pad up: BLUE | down: RED");
         telemetry.addData("Selected alliance", selectedAlliance);
@@ -144,10 +162,16 @@ public class VV17181Auto extends NextFTCOpMode {
 
         pickupComplete = false;
         new SequentialGroup(
+                new Delay(START_DELAY_SECONDS), // Only the third route has a start delay.
                 shootBallsCommand(SHOOTING_RUN_SECONDS),
-                new InstantCommand(() -> schedule(autoRoutinePickBalls())),
-                new WaitUntil(() -> pickupComplete),
-                shootBallsCommand(SHOOTING_RUN_SECONDS),
+                // Skip pickup, its completion wait, and the second shot together on the third route.
+                selectedRoute == AutoRoute.ROUTE_SHORT
+                        ? new InstantCommand(() -> {})
+                        : new SequentialGroup(
+                                new InstantCommand(() -> schedule(autoRoutinePickBalls())),
+                                new WaitUntil(() -> pickupComplete),
+                                shootBallsCommand(SHOOTING_RUN_SECONDS)
+                        ),
                 new InstantCommand(() -> schedule(sequential(
                         follow(follower, goToParkAlign()),
                         follow(follower, park())
@@ -168,13 +192,19 @@ public class VV17181Auto extends NextFTCOpMode {
     }
 
     private Command autoRoutinePickBalls() {
-        return sequential(
-                instant(intakeSystem::startIntaking).requiring(intakeSystem),
-                follow(follower, goToBalls()),
-                follow(follower, goToBallPick()),
-                follow(follower, returnToStart()),
-                instant(intakeSystem::stop).requiring(intakeSystem),
-                instant(() -> pickupComplete = true)
+        return race(
+                sequential(
+                        instant(intakeSystem::startIntaking).requiring(intakeSystem),
+                        follow(follower, goToBalls()),
+                        follow(follower, goToBallPick()),
+                        follow(follower, returnToStart())
+                ),
+                waitMs(PICKUP_TIMEOUT_SECONDS * 1000)
+        ).then(
+                instant(() -> {
+                    intakeSystem.stop();
+                    pickupComplete = true;
+                })
         );
     }
 
