@@ -30,7 +30,7 @@ public class UpDownSystem implements Subsystem {
 
     // RUN_TO_POSITION uses positive power for both directions; the target chooses direction.
     private static final double MOVE_POWER = 0.75;
-    private static final double TRAVEL_FRACTION = 0.45;
+    private static final double TRAVEL_FRACTION = 0.35;
     // Change to -1 if decreasing encoder counts raise the mechanism.
     private static final int UP_DIRECTION = 1;
     private int lowerPosition;
