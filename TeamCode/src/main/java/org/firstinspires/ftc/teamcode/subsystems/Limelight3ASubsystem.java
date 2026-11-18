@@ -23,6 +23,9 @@ public class Limelight3ASubsystem implements Subsystem {
 
     private Limelight3A vvLimelight;
     LLResult llResult = null;
+    // Signed horizontal angle for the same AprilTag shown in telemetry.
+    private double tagOffsetDegrees = Double.NaN;
+    private static final long MAX_TAG_AGE_MS = 250;
     YawPitchRollAngles orientation = null;
     Pose3D robotPose = null;
     private IMUEx imu = null;
@@ -32,7 +35,7 @@ public class Limelight3ASubsystem implements Subsystem {
     //private final double scale = 29024.85; // Value derived using mycurvefit.com
     private final double scale = 180.51; // Anuj/Team: Reverse engineering scale value derived using scale = knownDistance*SQRT(ta)
     // Use pipeline#8 for Red(TagIDs: 30,31), and #9 for Blue(TagIDs: 32,33)
-    private int currentPipeline = 8;
+    private int currentPipeline = 2;
     public char identifiedShootingPosition = '0'; //Zero is default
 
     private Limelight3ASubsystem(HardwareMap hardwareMap, Telemetry telemetry, IMUEx imu) {
@@ -71,6 +74,7 @@ public class Limelight3ASubsystem implements Subsystem {
         orientation = imu.getImu().getRobotYawPitchRollAngles();
         vvLimelight.updateRobotOrientation(orientation.getYaw());
         llResult = vvLimelight.getLatestResult();
+        tagOffsetDegrees = Double.NaN; // No angle until this result identifies a tag.
         identifiedShootingPosition = '0'; //Always start with the default position zero
 
         //Logic help to debug bad/no results
@@ -94,6 +98,7 @@ public class Limelight3ASubsystem implements Subsystem {
                 for (LLResultTypes.FiducialResult fiducial : fiducials) {
                     int tagId = fiducial.getFiducialId();  // <-- This is the AprilTag number
                     telemetry.addData("AprilTag ID", tagId);
+                    tagOffsetDegrees = fiducial.getTargetXDegrees();
                     identifiedShootingPosition = 'A';
                     break;
                 }
@@ -104,10 +109,22 @@ public class Limelight3ASubsystem implements Subsystem {
             // Classify this frame into a discrete shooting position based on tx + distance
             //identifiedShootingPosition = classifyShootingPosition(llResult.getTx(), distance);
 
-            telemetry.addData("Limelight", "Tx: %.3f | Ty: %.3f | Ta: %.3f | Yaw: %.3f | Distance: %.3f | Position: %s",
+            String tagAngle = Double.isFinite(tagOffsetDegrees)
+                    ? String.format(java.util.Locale.US, "%+.3f°", tagOffsetDegrees)
+                    : "No tag";
+            telemetry.addData("Limelight", "Tx: %.3f | Ty: %.3f | Ta: %.3f | Tag angle: %s | Yaw: %.3f | Distance: %.3f | Position: %s",
                     llResult.getTx(), llResult.getTy(), llResult.getTa(),
-                    robotPose.getOrientation().getYaw(), distance, identifiedShootingPosition);
+                    tagAngle, robotPose.getOrientation().getYaw(), distance, identifiedShootingPosition);
         }
+    }
+
+    /** Returns the tag angle only while the corresponding frame is fresh and on the active pipeline. */
+    public double getTagOffsetDegrees() {
+        if (llResult == null || llResult.getStaleness() > MAX_TAG_AGE_MS
+                || llResult.getPipelineIndex() != currentPipeline) {
+            return Double.NaN;
+        }
+        return tagOffsetDegrees;
     }
 
     public char getIdentifiedShootingPosition() {

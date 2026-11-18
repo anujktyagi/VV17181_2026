@@ -69,8 +69,11 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
     private PinpointLocalizer localizer;
     private Follower follower;
     private Command driverControlled;
-    // Stays false until we add the logic to start automatic movement.
+    // Only the follower controls the drivetrain while automatic movement is active.
     private boolean automaticMovement = false;
+    private Pose turnTarget;
+    private long turnStartedNanos;
+    private static final double TURN_TIMEOUT_SECONDS = 3.0;
 
     // Remember joystick motor directions before switching to Pedro's directions.
     // A later method will use these values to restore joystick driving.
@@ -88,12 +91,14 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
         intakeSystem = Intake.getInstance(telemetry);
         //shootingDirectionServo = ShootingDirectionServo.getInstance(telemetry);
         ballLoadingDC = BallLoadingDC.getInstance(telemetry);
-        light = Light.getInstance(telemetry);
     }
 
     @Override
     public void onInit() {
         super.onInit();
+
+        // Obtain the light after the SDK has supplied this OpMode's telemetry.
+        light = Light.getInstance(telemetry);
 
         // Record the lower reference during INIT; start with the mechanism lowered.
         upDownSystem = UpDownSystem.getInstance(telemetry);
@@ -117,6 +122,8 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
                 BindingsComponent.INSTANCE    // helps connect buttons on the gamepads to commands
         );
 
+        // Apply the default alliance color; Light.periodic() displays it during INIT.
+        updateAllianceLight();
     }
 
     private void initializeFollower() {
@@ -147,8 +154,9 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
         if (automaticMovement) {
             // The follower updates localization as part of controlling movement.
             follower.update();
-            // Once the path finishes, stop automatic updates and restore joystick driving.
-            if (!follower.following()) {
+            // Pose hold has no path to finish, so check the turn separately.
+            if (turnTarget != null ? turnFinished() : !follower.following()) {
+                turnTarget = null;
                 automaticMovement = false;
                 resumeDriverControl();
             }
@@ -170,9 +178,10 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
     private final MotorEx frontRightMotor = new MotorEx(RIGHT_FRONT_MOTOR_NAME).reversed(); // reversed so both sides move forward correctly
     private final MotorEx backLeftMotor = new MotorEx(LEFT_REAR_MOTOR_NAME);
     private final MotorEx backRightMotor = new MotorEx(RIGHT_REAR_MOTOR_NAME).reversed();
-/*
+
     @Override
     public void onWaitForStart() {
+        Alliance previousAlliance = selectedAlliance;
         // Gamepad 1 selects the alliance only during INIT; no movement is started.
         if (gamepad1.dpad_up) {
             selectedAlliance = Alliance.BLUE;
@@ -180,12 +189,17 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
             selectedAlliance = Alliance.RED;
         }
 
+        // Update only when the driver changes alliance, not every loop while held.
+        if (selectedAlliance != previousAlliance) {
+            updateAllianceLight();
+        }
+
         // Show the selection so the driver can confirm it before pressing START.
         telemetry.addData("Select alliance", "D-pad up: BLUE | down: RED");
         telemetry.addData("Selected alliance", selectedAlliance);
         telemetry.update();
     }
-*/
+
     // This method runs when the driver presses the START button on the Driver Station
     @Override
     public void onStartButtonPressed() {
@@ -212,11 +226,25 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
         Gamepads.gamepad1().dpadUp().whenBecomesTrue(upDownSystem.moveUp);
         Gamepads.gamepad1().dpadDown().whenBecomesTrue(upDownSystem.moveDown);
 
-        // Gamepad 1 A: drive to this target relative to the TeleOp origin.
-        // The completion check in onUpdate() restores joystick control afterward.
-        /*Gamepads.gamepad1().a().whenBecomesTrue(
-                new InstantCommand(() -> startAutomaticMovement(12, 12, 90))
-        );*/
+        // B aims at the detected AprilTag from the robot's current position.
+        /*Gamepads.gamepad1().b().whenBecomesTrue(new InstantCommand(() -> {
+            if (automaticMovement) return;
+
+            //double tagOffsetDegrees = limelight3ASubsystem.getTagOffsetDegrees();
+            //if (!Double.isFinite(tagOffsetDegrees)) return;
+
+            Pose current = localizer.state().pose();
+            // A tag to the right has positive tx; a right turn decreases Pedro's heading.
+            //turnTarget = PoseFactory.degrees().of(current.x(), current.y(), Math.toDegrees(current.heading()) - tagOffsetDegrees);
+            turnTarget = PoseFactory.degrees().of(current.x(), current.y(), 180);
+            pauseDriverControl();
+            prepareForFollower();
+
+            // Hold the current X/Y while turning toward the tag.
+            follower.hold(turnTarget);
+            turnStartedNanos = System.nanoTime();
+            automaticMovement = true;
+        }));*/
 
         /* 🎮 GAMEPAD 2 CONTROLS (the second controller) */
 
@@ -267,29 +295,33 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
 
         // D-Pad Left → run the ball loading servo backward (to load balls)
         //Gamepads.gamepad2().dpadUp().whenBecomesTrue(light.setPattern(Light.SOLID_BLUE_POSITION));
-        Gamepads.gamepad2().dpadUp().whenBecomesTrue(
+        /*Gamepads.gamepad2().dpadUp().whenBecomesTrue(
                 new SequentialGroup(
                         light.setPattern(0.05),
                         new InstantCommand(() -> {
                             limelight3ASubsystem.switchLinelinePipeline(9);
                         }).requires(limelight3ASubsystem)
                 )
-        );
+        );*/
 
         // D-Pad Right → stop the ball loading servo
         //Gamepads.gamepad2().dpadDown().whenBecomesTrue(light.setPattern(Light.SOLID_RED_POSITION));
-        Gamepads.gamepad2().dpadDown().whenBecomesTrue(
+        /*Gamepads.gamepad2().dpadDown().whenBecomesTrue(
                 new SequentialGroup(
                         light.setPattern(-0.05),
                         new InstantCommand(() -> {
                             limelight3ASubsystem.switchLinelinePipeline(8);
                         }).requires(limelight3ASubsystem)
                 )
-        );
+        );*/
     }
 
     @Override
     public void onStop() {
+        // Stop an active turn without restarting the joystick command.
+        if (automaticMovement) {
+            follower.stop();
+        }
         // Release active position-control power when the Driver Station stops TeleOp.
         if (upDownSystem != null) {
             upDownSystem.stop();
@@ -380,6 +412,17 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
         automaticMovement = true;
     }
 
+    /** Returns control at the target or when the turn times out. */
+    private boolean turnFinished() {
+        Pose current = localizer.state().pose();
+        double difference = turnTarget.heading() - current.heading();
+        // Wrap the error so equivalent headings compare correctly across +/-180 degrees.
+        double headingError = Math.atan2(Math.sin(difference), Math.cos(difference));
+        double positionError = Math.hypot(turnTarget.x() - current.x(), turnTarget.y() - current.y());
+        return (Math.abs(headingError) <= Math.toRadians(2.0) && positionError <= 1.0)
+                || (System.nanoTime() - turnStartedNanos) / 1e9 >= TURN_TIMEOUT_SECONDS;
+    }
+
     /**
      * Creates a straight path from the latest measured robot pose to a target.
      * Coordinates use the same reference frame as the position telemetry:
@@ -397,6 +440,16 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
 
         // Travel along a straight line while changing heading along the path.
         return line(currentPose, targetPose).linear(currentPose, targetPose);
+    }
+
+    /** Sets the alliance color directly so selection works before START as well. */
+    private void updateAllianceLight() {
+        // Use absolute colors so repeating the selection does not change the pattern value.
+        if (selectedAlliance == Alliance.BLUE) {
+            light.selectColor(Light.SOLID_BLUE_POSITION);
+        } else {
+            light.selectColor(Light.SOLID_RED_POSITION);
+        }
     }
 
 }
