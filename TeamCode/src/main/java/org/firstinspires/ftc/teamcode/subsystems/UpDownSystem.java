@@ -11,8 +11,8 @@ import dev.nextftc.core.subsystems.Subsystem;
 import dev.nextftc.hardware.impl.MotorEx;
 
 /**
- * Moves between two encoder positions, separated by 15% of a motor output revolution.
- * The mechanism must be physically lowered before its first initialization each OpMode.
+ * Moves between two encoder positions, separated by 35% of a motor output revolution.
+ * The mechanism must be physically raised before its first initialization each OpMode.
  * Registered in RobotCentricTeleOp with D-pad up/down target commands.
  */
 public class UpDownSystem implements Subsystem {
@@ -31,23 +31,23 @@ public class UpDownSystem implements Subsystem {
     // RUN_TO_POSITION uses positive power for both directions; the target chooses direction.
     private static final double MOVE_POWER = 0.75;
     private static final double TRAVEL_FRACTION = 0.35;
-    // Change to -1 if decreasing encoder counts raise the mechanism.
-    private static final int UP_DIRECTION = 1;
+    // Decreasing encoder counts raise the mechanism; increasing counts lower it.
+    private static final int UP_DIRECTION = -1;
     private int lowerPosition;
     private int upperPosition;
     // True only while travelling to a target; reaching it removes motor power.
     private boolean movingToTarget = false;
 
-    // Moves to the fixed upper target; repeated calls do not add more travel.
+    // Moves to the fixed lower target; repeated calls do not add more travel.
     public Command moveDown = new InstantCommand(() -> {
         ensureInitialized();
-        moveToPosition(upperPosition);
+        moveToPosition(lowerPosition);
     }).requires(this);
 
-    // Returns to the lower position recorded during initialization.
+    // Returns to the raised position recorded during initialization.
     public Command moveUp = new InstantCommand(() -> {
         ensureInitialized();
-        moveToPosition(lowerPosition);
+        moveToPosition(upperPosition);
     }).requires(this);
 
     /** Starts position control; periodic() removes power when the target is reached. */
@@ -57,6 +57,11 @@ public class UpDownSystem implements Subsystem {
         hardware.setMode(DcMotor.RunMode.RUN_TO_POSITION);
         hardware.setPower(MOVE_POWER);
         movingToTarget = true;
+    }
+
+    /** Reports an active move until periodic() detects arrival or stop() cancels it. */
+    public boolean isMoving() {
+        return movingToTarget;
     }
 
     /** Stops motor power; the configured BRAKE behavior remains enabled. */
@@ -111,10 +116,11 @@ public class UpDownSystem implements Subsystem {
         if (travelTicks < 1) {
             throw new IllegalStateException("Up/down travel must be at least one encoder tick");
         }
-        // Record a reference, not an automatic homing move. Start physically lowered.
-        lowerPosition = hardware.getCurrentPosition();
-        upperPosition = lowerPosition + UP_DIRECTION * travelTicks;
-        hardware.setTargetPosition(lowerPosition);
+        // Record the physically raised starting position; initialization does not move the motor.
+        upperPosition = hardware.getCurrentPosition();
+        // The lower target is one travel distance opposite the upward encoder direction.
+        lowerPosition = upperPosition - UP_DIRECTION * travelTicks;
+        hardware.setTargetPosition(upperPosition);
         hardware.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
         // BRAKE resists coasting but is not active position holding against gravity.
         motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
