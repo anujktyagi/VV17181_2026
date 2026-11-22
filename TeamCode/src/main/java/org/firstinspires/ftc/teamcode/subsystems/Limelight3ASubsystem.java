@@ -49,6 +49,18 @@ public class Limelight3ASubsystem implements Subsystem {
     public static Limelight3ASubsystem getInstance(HardwareMap hardwareMap, Telemetry telemetry, IMUEx imu) {
         if (INSTANCE == null) {
             INSTANCE = new Limelight3ASubsystem(hardwareMap, telemetry, imu);
+        } else {
+            // The singleton survives OpMode changes; reconnect it to the current run.
+            INSTANCE.telemetry = telemetry;
+            INSTANCE.imu = imu;
+            INSTANCE.vvLimelight = hardwareMap.get(Limelight3A.class, "limelight");
+            // Restart polling because the previous OpMode may have stopped the camera.
+            INSTANCE.vvLimelight.pipelineSwitch(INSTANCE.currentPipeline);
+            INSTANCE.vvLimelight.start();
+            // Discard the previous run's target until periodic() reads a new result.
+            INSTANCE.llResult = null;
+            INSTANCE.tagOffsetDegrees = Double.NaN;
+            INSTANCE.identifiedShootingPosition = '0';
         }
         return INSTANCE;
     }
