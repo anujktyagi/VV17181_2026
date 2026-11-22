@@ -20,6 +20,8 @@ public class Intake implements Subsystem {
 
     // Used to show messages and data on the Driver Station phone
     private Telemetry telemetry;
+    // Hardware setup runs once per OpMode, even though this singleton survives between runs.
+    private boolean initialized = false;
 
     /**
      * This sets up the intake system with telemetry.
@@ -37,6 +39,10 @@ public class Intake implements Subsystem {
         if (INSTANCE == null) {
             INSTANCE = new Intake(telemetry);
         }
+        // The singleton survives OpMode runs; always use the current run's telemetry.
+        INSTANCE.telemetry = telemetry;
+        // Prepare for a new OpMode without accessing hardware in this factory method.
+        INSTANCE.initialized = false;
         return INSTANCE;
     }
 
@@ -59,7 +65,26 @@ public class Intake implements Subsystem {
     private static final double STOP_POWER = 0.0;      // Stop spinning
     private static final double INTAKE_POWER = 1.0;    // Spin forward (pull things IN)
 
+    /** Resolves the motor and establishes a stopped state once per OpMode. */
+    private void ensureInitialized() {
+        if (initialized) return;
+
+        // Write directly to hardware so an old cached zero cannot skip the stop command.
+        motor.getMotor().setPower(STOP_POWER);
+        // Keep the wrapper's cached power consistent with the stopped hardware.
+        motor.setPower(STOP_POWER);
+        initialized = true;
+    }
+
+    /** Allows NextFTC to initialize Intake when its subsystem component is initialized. */
+    @Override
+    public void initialize() {
+        ensureInitialized();
+    }
+
     public void startIntaking() {
+        // Finish setup before applying the requested intake power.
+        ensureInitialized();
         motor.setPower(INTAKE_POWER);
     }
 
@@ -73,6 +98,8 @@ public class Intake implements Subsystem {
      * - If it's already spinning, it stops
      */
     public Command startStop = new InstantCommand(() -> {
+        // Establish a known motor state before reading power for the toggle.
+        ensureInitialized();
         if (motor.getPower() <= 0.10 && motor.getPower() >= 0.0)
             motor.setPower(INTAKE_POWER);   // Turn ON the intake
         else
@@ -83,6 +110,8 @@ public class Intake implements Subsystem {
      * Stops the intake completely (used in emergencies or resets)
      */
     public void stop() {
+        // Also support stopping before the first periodic update.
+        ensureInitialized();
         motor.setPower(STOP_POWER);
     }
 
@@ -90,11 +119,16 @@ public class Intake implements Subsystem {
      * Command to reverse the intake motor.
      * This is used to push out game pieces that might be stuck.
      */
-    public Command reverse = new InstantCommand(() -> motor.setPower(REVERSE_POWER))
-            .requires(this);
+    public Command reverse = new InstantCommand(() -> {
+        // Initialize before applying reverse power, just as for forward operation.
+        ensureInitialized();
+        motor.setPower(REVERSE_POWER);
+    }).requires(this);
 
     /** Starts reverse if stopped or moving forward; stops if already reversing. */
     public Command startStopReverse = new InstantCommand(() -> {
+        // Initialize before checking whether the motor is already reversing.
+        ensureInitialized();
         if (motor.getPower() < 0.0) {
             stop();
         } else {
@@ -111,6 +145,8 @@ public class Intake implements Subsystem {
      */
     @Override
     public void periodic() {
+        // Also handles components registered inside onInit(), after NextFTC's initialization hook.
+        ensureInitialized();
         telemetry.addData("<===== Intake Subsystem =====>", "");
         telemetry.addData("Intake Power", "%.2f", motor.getPower());
         //telemetry.addData("Intake Direction", motor.getDirection());
