@@ -19,6 +19,8 @@ import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import org.firstinspires.ftc.teamcode.pedro.Constants;
 import org.firstinspires.ftc.teamcode.subsystems.BallLoadingDC;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
+import org.firstinspires.ftc.teamcode.subsystems.Light;
+import org.firstinspires.ftc.teamcode.subsystems.Limelight3ASubsystem;
 import org.firstinspires.ftc.teamcode.subsystems.ShootingSystem;
 
 import dev.nextftc.core.components.SubsystemComponent;
@@ -27,6 +29,8 @@ import dev.nextftc.core.commands.delays.WaitUntil;
 import dev.nextftc.core.commands.groups.SequentialGroup;
 import dev.nextftc.core.commands.utility.InstantCommand;
 import dev.nextftc.ftc.NextFTCOpMode;
+import dev.nextftc.hardware.impl.Direction;
+import dev.nextftc.hardware.impl.IMUEx;
 
 @Autonomous
 public class VV17181Auto extends NextFTCOpMode {
@@ -63,6 +67,11 @@ public class VV17181Auto extends NextFTCOpMode {
     private ShootingSystem shootingSystem;
     private BallLoadingDC ballLoadingDC;
     private Intake intakeSystem;
+    // Limelight uses the same IMU mounting configuration as RobotCentricTeleOp.
+    private final IMUEx imu = new IMUEx("imu", Direction.DOWN, Direction.FORWARD).zeroed();
+    private Limelight3ASubsystem limelight3ASubsystem;
+    // Displays the alliance color, with the existing Limelight green override.
+    private Light light;
     private final PoseFactory poseFactory = PoseFactory.degrees();
 
     // Active poses are assigned from the selected route before they are used.
@@ -81,7 +90,7 @@ public class VV17181Auto extends NextFTCOpMode {
                 // Straight route: coordinates relative to its starting position.
                 startPose = poseFactory.of(0, 0, 0);
                 ballPose = poseFactory.of(-4, -32, 0);
-                ballPickPose = poseFactory.of(0, -32, 0);
+                ballPickPose = poseFactory.of(-1, -32, 0);
                 parkAlignPose = poseFactory.of(-6, -24, 45);
                 parkPose = poseFactory.of(-57, -40, 90);
                 break;
@@ -114,11 +123,20 @@ public class VV17181Auto extends NextFTCOpMode {
         shootingSystem = ShootingSystem.getInstance(telemetry);
         ballLoadingDC = BallLoadingDC.getInstance(telemetry);
         intakeSystem = Intake.getInstance(telemetry);
+        // Connect the camera to this OpMode's hardware, telemetry, and IMU during INIT.
+        limelight3ASubsystem = Limelight3ASubsystem.getInstance(hardwareMap, telemetry, imu);
+        // Use this run's telemetry and reset the light to the default alliance color.
+        light = Light.getInstance(telemetry);
+        updateAllianceLight();
 
         addComponents(
                 new SubsystemComponent(shootingSystem),
                 new SubsystemComponent(ballLoadingDC),
-                new SubsystemComponent(intakeSystem)
+                new SubsystemComponent(intakeSystem),
+                // Run camera processing and add its telemetry during INIT and autonomous.
+                new SubsystemComponent(limelight3ASubsystem),
+                // Update the light after Limelight has processed the latest camera result.
+                new SubsystemComponent(light)
         );
 
         follower = Constants.create(hardwareMap);
@@ -138,10 +156,17 @@ public class VV17181Auto extends NextFTCOpMode {
 
         // Choose alliance independently of the left/right route selection.
         // Use gamepad 1 D-pad up for blue and D-pad down for red.
+        // Remember the previous selection so the light changes only when needed.
+        Alliance previousAlliance = selectedAlliance;
         if (gamepad1.dpad_up) {
             selectedAlliance = Alliance.BLUE;
         } else if (gamepad1.dpad_down) {
             selectedAlliance = Alliance.RED;
+        }
+
+        // Apply the new alliance color directly while waiting for START.
+        if (selectedAlliance != previousAlliance) {
+            updateAllianceLight();
         }
 
         // Display both choices so the driver can confirm them before pressing START.
@@ -163,14 +188,15 @@ public class VV17181Auto extends NextFTCOpMode {
         pickupComplete = false;
         new SequentialGroup(
                 new Delay(START_DELAY_SECONDS), // Only the third route has a start delay.
-                shootBallsCommand(SHOOTING_RUN_SECONDS),
+                shootBallsIfPositionIdentified(SHOOTING_RUN_SECONDS),
                 // Skip pickup, its completion wait, and the second shot together on the third route.
                 selectedRoute == AutoRoute.ROUTE_SHORT
                         ? new InstantCommand(() -> {})
                         : new SequentialGroup(
                                 new InstantCommand(() -> schedule(autoRoutinePickBalls())),
                                 new WaitUntil(() -> pickupComplete),
-                                shootBallsCommand(SHOOTING_RUN_SECONDS)
+                                // Run the second shooting only if the hive is up, limelight can detect the AprilTag.
+                                shootBallsIfPositionIdentified(SHOOTING_RUN_SECONDS)
                         ),
                 new InstantCommand(() -> schedule(sequential(
                         follow(follower, goToParkAlign()),
@@ -229,6 +255,44 @@ public class VV17181Auto extends NextFTCOpMode {
         );
     }
 
+    /**
+     * Checks Limelight when this step starts, rather than when the sequence is built.
+     * Avoids the constructor bug in NextFTC 1.0.0's IfElseCommand.
+     * The shooting command runs inside this step so parking waits for it to finish.
+     */
+    private dev.nextftc.core.commands.Command shootBallsIfPositionIdentified(double runSeconds) {
+        dev.nextftc.core.commands.Command shooting = shootBallsCommand(runSeconds);
+        return new dev.nextftc.core.commands.Command() {
+            private boolean shouldShoot = false;
+
+            @Override
+            public void start() {
+                // Decide once on entry; no identified position means skip this shot.
+                shouldShoot = limelight3ASubsystem.getIdentifiedShootingPosition() != '0';
+                if (shouldShoot) shooting.start();
+            }
+
+            @Override
+            public void update() {
+                // Advance the existing shooting sequence without scheduling it separately.
+                if (shouldShoot) shooting.update();
+            }
+
+            @Override
+            public boolean isDone() {
+                // Safe even before start(): no uninitialized selected command is accessed.
+                return !shouldShoot || shooting.isDone();
+            }
+
+            @Override
+            public void stop(boolean interrupted) {
+                // Forward completion or cancellation only if shooting actually started.
+                if (shouldShoot) shooting.stop(interrupted);
+                if (shouldShoot && interrupted) stopSubsystems();
+            }
+        }.setRequirements(shooting.getRequirements());
+    }
+
     private void stopSubsystems() {
         shootingSystem.stop();
         ballLoadingDC.stop();
@@ -256,6 +320,16 @@ public class VV17181Auto extends NextFTCOpMode {
 
     private Path goToParkAlign() {
         return line(startPose, parkAlignPose).linear(startPose, parkAlignPose);
+    }
+
+    /** Selects the alliance color directly; Light.periodic() applies it to the hardware. */
+    private void updateAllianceLight() {
+        // Use absolute positions so repeated selections keep the same color.
+        if (selectedAlliance == Alliance.BLUE) {
+            light.selectColor(Light.SOLID_BLUE_POSITION);
+        } else {
+            light.selectColor(Light.SOLID_RED_POSITION);
+        }
     }
 
     private Path park(){
