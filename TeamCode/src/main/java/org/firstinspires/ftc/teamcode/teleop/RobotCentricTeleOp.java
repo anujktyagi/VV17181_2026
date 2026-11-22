@@ -66,6 +66,8 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
     private Light light;
     // Encoder-controlled mechanism operated by gamepad 1 after START.
     private UpDownSystem upDownSystem;
+    // A neutral D-pad after START or movement is required before accepting a new press.
+    private boolean upDownButtonsReady = false;
     private PinpointLocalizer localizer;
     private Follower follower;
     private Command driverControlled;
@@ -88,7 +90,6 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
 
         // We connect our subsystems to the robot and give them access to telemetry (data shown on driver station)
         shootingSystem = ShootingSystem.getInstance(telemetry);
-        intakeSystem = Intake.getInstance(telemetry);
         //shootingDirectionServo = ShootingDirectionServo.getInstance(telemetry);
         ballLoadingDC = BallLoadingDC.getInstance(telemetry);
     }
@@ -97,18 +98,22 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
     public void onInit() {
         super.onInit();
 
-        // Obtain the light after the SDK has supplied this OpMode's telemetry.
-        light = Light.getInstance(telemetry);
+        // Obtain Intake after the SDK has supplied the current OpMode's telemetry.
+        intakeSystem = Intake.getInstance(telemetry);
 
-        // Record the lower reference during INIT; start with the mechanism lowered.
+        limelight3ASubsystem = Limelight3ASubsystem.getInstance(this.hardwareMap, telemetry, imu);
+
+        // Record the upper reference during INIT; start with the mechanism raised.
         upDownSystem = UpDownSystem.getInstance(telemetry);
         upDownSystem.initialize();
+
+        // Obtain the light after the SDK has supplied this OpMode's telemetry.
+        light = Light.getInstance(telemetry);
 
         localizer = new PinpointLocalizer(hardwareMap, Constants.localizerConfig);
         localizer.setPose(PoseFactory.degrees().of(0, 0, 0));
         initializeFollower();
     
-        limelight3ASubsystem = Limelight3ASubsystem.getInstance(this.hardwareMap, telemetry, imu);
 
         // Here we "add" all these subsystems so NextFTC can manage and update them automatically
         addComponents(
@@ -151,14 +156,19 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
 
     @Override
     public void onUpdate() {
+        // One handler owns both mechanism buttons to prevent conflicting target requests.
+        handleUpDownButtons();
         if (automaticMovement) {
-            // The follower updates localization as part of controlling movement.
-            follower.update();
-            // Pose hold has no path to finish, so check the turn separately.
-            if (turnTarget != null ? turnFinished() : !follower.following()) {
-                turnTarget = null;
-                automaticMovement = false;
-                resumeDriverControl();
+            if (turnTarget != null) {
+                // Turning uses TeleOp directions and controls heading only.
+                updateTurn();
+            } else {
+                // Other automatic movement still uses Pedro and its motor directions.
+                follower.update();
+                if (!follower.following()) {
+                    automaticMovement = false;
+                    resumeDriverControl();
+                }
             }
         } else {
             // Joysticks control driving; only update the measured position.
@@ -221,27 +231,19 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
         // "Schedule" means start running that drive command
         driverControlled.schedule();
 
-        // After START, each press requests a fixed encoder target (not hold-to-move).
-        // During INIT these same buttons still select alliance in onWaitForStart().
-        Gamepads.gamepad1().dpadUp().whenBecomesTrue(upDownSystem.moveUp);
-        Gamepads.gamepad1().dpadDown().whenBecomesTrue(upDownSystem.moveDown);
+        // Require release after START so an INIT alliance selection cannot move the mechanism.
+        // onUpdate() handles both buttons together instead of independent bindings.
+        upDownButtonsReady = false;
 
-        // B aims at the detected AprilTag from the robot's current position.
+        // Each B press requests a half-turn from the current heading, without X/Y correction.
         /*Gamepads.gamepad1().b().whenBecomesTrue(new InstantCommand(() -> {
             if (automaticMovement) return;
 
-            //double tagOffsetDegrees = limelight3ASubsystem.getTagOffsetDegrees();
-            //if (!Double.isFinite(tagOffsetDegrees)) return;
-
             Pose current = localizer.state().pose();
-            // A tag to the right has positive tx; a right turn decreases Pedro's heading.
-            //turnTarget = PoseFactory.degrees().of(current.x(), current.y(), Math.toDegrees(current.heading()) - tagOffsetDegrees);
-            turnTarget = PoseFactory.degrees().of(current.x(), current.y(), 180);
+            // Capture a new relative target each time; updateTurn() uses only its heading.
+            turnTarget = PoseFactory.degrees().of(current.x(), current.y(), Math.toDegrees(current.heading()) + 180);
             pauseDriverControl();
-            prepareForFollower();
-
-            // Hold the current X/Y while turning toward the tag.
-            follower.hold(turnTarget);
+            // Keep TeleOp directions; onUpdate() will run rotation-only control.
             turnStartedNanos = System.nanoTime();
             automaticMovement = true;
         }));*/
@@ -316,11 +318,56 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
         );*/
     }
 
+    /**
+     * Accepts one Up or Down press only when idle and after both buttons were released.
+     * Conflicting presses and presses during travel are discarded, never queued.
+     */
+    private void handleUpDownButtons() {
+        boolean upPressed = gamepad1.dpad_up;
+        boolean downPressed = gamepad1.dpad_down;
+
+        // Do not reverse an active move; require another release after it finishes.
+        if (upDownSystem.isMoving()) {
+            upDownButtonsReady = false;
+            return;
+        }
+
+        // Only a neutral D-pad while idle arms the next fresh press.
+        if (!upPressed && !downPressed) {
+            upDownButtonsReady = true;
+            return;
+        }
+
+        // Reject both buttons together, including releasing just one afterward.
+        if (upPressed && downPressed) {
+            upDownButtonsReady = false;
+            return;
+        }
+
+        // Holding a button or pressing during the lockout cannot start another move.
+        if (!upDownButtonsReady) return;
+        upDownButtonsReady = false;
+
+        // Schedule one existing target command and consume this press immediately.
+        if (upPressed) {
+            upDownSystem.moveUp.schedule();
+        } else {
+            upDownSystem.moveDown.schedule();
+        }
+    }
+
     @Override
     public void onStop() {
-        // Stop an active turn without restarting the joystick command.
+        // Stop automatic control without restarting the joystick command.
         if (automaticMovement) {
-            follower.stop();
+            if (turnTarget != null) {
+                // Rotation-only control writes directly to the wheel motors.
+                setTurnPower(0);
+            } else {
+                follower.stop();
+            }
+            turnTarget = null;
+            automaticMovement = false;
         }
         // Release active position-control power when the Driver Station stops TeleOp.
         if (upDownSystem != null) {
@@ -412,15 +459,57 @@ public class RobotCentricTeleOp extends NextFTCOpMode {
         automaticMovement = true;
     }
 
-    /** Returns control at the target or when the turn times out. */
-    private boolean turnFinished() {
-        Pose current = localizer.state().pose();
-        double difference = turnTarget.heading() - current.heading();
-        // Wrap the error so equivalent headings compare correctly across +/-180 degrees.
-        double headingError = Math.atan2(Math.sin(difference), Math.cos(difference));
-        double positionError = Math.hypot(turnTarget.x() - current.x(), turnTarget.y() - current.y());
-        return (Math.abs(headingError) <= Math.toRadians(2.0) && positionError <= 1.0)
-                || (System.nanoTime() - turnStartedNanos) / 1e9 >= TURN_TIMEOUT_SECONDS;
+    /**
+     * Calculates the remaining turn in radians using the latest measured heading.
+     * Call only while turnTarget is set. This helper does not update localization
+     * or command the motors; updateTurn() handles those operations.
+     */
+    private double getTurnHeadingError() {
+        double difference = turnTarget.heading() - localizer.state().pose().heading();
+        // Wrap the error to +/- pi so crossing 0/360 degrees uses the shorter turn.
+        return Math.atan2(Math.sin(difference), Math.cos(difference));
+    }
+
+    /**
+     * Applies opposite wheel powers to rotate without commanding translation.
+     * Use with TeleOp motor directions, after pausing joystick control.
+     * Passing zero stops all four wheels. Verify the heading direction on the robot.
+     */
+    private void setTurnPower(double power) {
+        // Both wheels on each side receive the same power; the sides oppose each other.
+        frontLeftMotor.setPower(power);
+        backLeftMotor.setPower(power);
+        frontRightMotor.setPower(-power);
+        backRightMotor.setPower(-power);
+    }
+
+    /**
+     * Updates a rotation-only turn using TeleOp motor directions.
+     * Call with turnTarget set, joystick control paused, and turnStartedNanos recorded.
+     * onUpdate() calls this while a rotation-only turn is active.
+     */
+    private void updateTurn() {
+        // Read the latest pose before calculating the remaining angle.
+        localizer.update();
+        double headingError = getTurnHeadingError();
+
+        // Finish based on heading only; this turn does not correct X or Y.
+        boolean atTarget = Math.abs(headingError) <= Math.toRadians(2.0);
+        boolean timedOut =
+                (System.nanoTime() - turnStartedNanos) / 1e9 >= TURN_TIMEOUT_SECONDS;
+
+        if (atTarget || timedOut) {
+            // Stop the wheels before allowing the joystick command to run again.
+            setTurnPower(0);
+            turnTarget = null;
+            automaticMovement = false;
+            driverControlled.schedule();
+            return;
+        }
+
+        // Reduce power near the target and limit it to 25% in either direction.
+        double turnPower = Math.max(-0.25, Math.min(0.25, headingError * 0.5));
+        setTurnPower(turnPower);
     }
 
     /**
